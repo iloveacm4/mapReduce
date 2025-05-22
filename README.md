@@ -1,77 +1,109 @@
-### MIT6.824之MapReduce实现
+# Distributed Systems Implementations
+This project contains implementations of several key concepts in distributed systems. It appears to be based on labs from a course like MIT's 6.824.
 
-这篇文章主要是大致分析一下MapReduce的实现，具体代码见Github
+The major components include:
+*   A MapReduce framework for distributed data processing.
+*   An implementation of the Raft consensus algorithm.
+*   A fault-tolerant key-value store built using Raft.
+*   A sharded key-value store for improved scalability.
 
-首先，依照MIT的lab已经给出了大致代码。
+## Project Structure
 
-我们的实现主要分为两个部分，master.go 和 worker.go。另外还定义了用于RPC的结构rpc.go
+Here's a breakdown of the main directories within the project:
 
-```go
-// Master 结构体
-type Master struct {
-	// Your definitions here.
-	AllFilesName        map[string]int	  //记录文件名
-	MapTaskNumCount     int
-	NReduce             int               // 记录需要生成的Reduce task数量
-	InterFIlename       [][]string        // intermediate file
-	MapFinished         bool
-	ReduceTaskStatus    map[int]int      // 记录Reduce状态
-	ReduceFinished      bool              // 记录是否完成reduce，完成后任务结束
-	RWLock              *sync.RWMutex
-}
+*   `mr/`: Contains the implementation of the MapReduce framework, including the master, worker, and RPC logic for their communication.
+*   `raft/`: Houses the implementation of the Raft consensus algorithm, a protocol for managing a replicated log.
+*   `kvraft/`: Implements a fault-tolerant key-value store. This store utilizes the Raft protocol to ensure consistency across replicas.
+*   `shardmaster/`: Contains the code for a service that manages the configuration of a sharded key-value store, deciding which shards are served by which replica groups.
+*   `shardkv/`: Implements a sharded key-value store, which distributes data across multiple replica groups (managed by Raft) to achieve scalability.
+*   `labrpc/`: A library for remote procedure calls (RPC). It simulates a lossy network environment where messages can be delayed or lost, which is crucial for testing the robustness of distributed algorithms.
+*   `labgob/`: A utility for encoding and decoding Go objects, likely used for serializing data for RPC or persistent storage.
+*   `main/`: Contains various Go programs that serve as entry points for running different parts of the system (e.g., MapReduce master, workers) and includes test scripts and sample data.
+*   `mrapps/`: Holds example MapReduce applications, such as word count (`wc.go`) or an indexer. These are compiled into shared object files (`.so`) to be dynamically loaded by the MapReduce worker.
+*   `linearizability/`: Provides tools and tests for checking the linearizability of the distributed data stores, ensuring that they behave like a single, correct copy of the data despite replication.
 
-//两个chan用来存放map任务 和 Reduce任务
-var maptasks chan string          // chan for map task
-var reducetasks chan int          // chan for reduce task
+## Running the MapReduce System
+
+The MapReduce framework can be run using the programs in the `main/` directory and the example applications in `mrapps/`.
+
+### 1. Start the Master
+
+The master process coordinates the MapReduce tasks. To start the master, provide it with a list of input text files. The example text files (e.g., `pg-*.txt`) are located in the `main/` directory.
+
+```bash
+go run main/mrmaster.go main/pg*.txt
 ```
 
+The master will output information about its status and wait for workers to connect. It typically requires a specified number of reduce tasks (often hardcoded or as a parameter in `mr.MakeMaster`).
 
+### 2. Start Workers
 
-```go
-//master.go
+Workers execute the map and reduce tasks assigned by the master. You need to provide a MapReduce application to the worker. Example applications (like word count, `wc.so`) are built from the source files in `mrapps/`.
 
-//前期准备工作
+First, ensure the MapReduce application is built (e.g., for `wc.go`):
 
-func MakeMaster(files []string, nReduce int) *Master {} //初始化Master结构体，开启server服务，会调用master.server()
-
-func (m *Master) server() {} //注册RPC，调用generateTask()产生任务，等待worker发来的任务请求
-
-func (m *Master) generateTask() {} //将Master结构体中AllFileName所有文件加载入 maptasks, 再处理完成后，再加载reduce任务进入reducetasks
-
-
-// 接受远程调用，为worker分配任务
-
-func (m *Master) MyCallHandler(args *MyArgs, reply *MyReply) error {} //负责接受worker发来的请求，有三种请求MsgForTask，
-//一是请求任务，请求map任务以及请求reduce任务，根据不同的请求作不同的处理。需要设置reply为相应的值。并且运行一个守护协程timerForWorker()
-//二是请求结束map任务MsgForFinishMap，用来通知master map任务结束。设置AllFileName[filename]为Finished状态
-//三是请求结束reduce任务MsgForFinishReduce。同样需要设置ReduceTaskStatus[index]为Finished状态
-
-
-func (m *Master)timerForWorker(taskType, identify string){} //设置定时器为10秒，10秒内完成了任务，则设置相应的任务为Finished
-//否则重新将任务设置为未完成状态并加入相应的任务队列
+```bash
+go build -buildmode=plugin ../mrapps/wc.go
 ```
 
-```gp
-//worker.go
+This command should be run from the `main/` directory, or adjust the path to `wc.go` accordingly. It will produce `wc.so`.
 
-func Worker(mapf func(string, string) []KeyValue, 
-            reducef func(string, []string) string) {} //主函数，死循环，不断地调用CallForTask()函数请求任务，并根据master分配的
-												  //任务类型调用mapInWorker(), 或者reduceInWorker()
+Then, start one or more workers:
 
-
-func CallForTask(msgType int,msgCnt string) MyReply {} // 调用RPC，返回请求到的任务
-
-
-func mapInWorker(reply *MyReply,mapf func(string, string) []KeyValue) {} 
-//调用mapf做map任务， 并调用WriteToJSONFile()写入JSON文件中，																   
-//调用SendInterFiles，表明已处理到中间状态																  
-//并调用CallForTask(MsgForFinishMap, reply.Filename)表明结束该任务
-
-func reduceInWorker(reply *MyReply, reducef func(string, []string) string) {} 
-//与mapInWorker同理
-//统计的原理是按照key排序，然后遍历统计
-
-func SendInterFiles(msgType int, msgCnt string, nReduceType int) MyReply {}
-//发送中间文件到master表明位置
+```bash
+go run main/mrworker.go wc.so
 ```
 
+You can start multiple worker processes, and they will request tasks from the master.
+
+### 3. Testing the MapReduce Implementation
+
+A test script is provided in the `main/` directory to verify the MapReduce implementation:
+
+```bash
+cd main
+./test-mr.sh
+cd ..
+```
+
+This script usually runs a sequence of MapReduce jobs (like word count and indexer) with various configurations, including tests for fault tolerance.
+
+## Running Tests for Other Components
+
+The project includes tests for various components like Raft, the key-value store, and the sharded key-value store. These tests are typically located in `_test.go` files within their respective package directories.
+
+To run these tests, navigate to the specific directory and use the `go test` command.
+
+For example, to test the Raft implementation:
+
+```bash
+cd raft
+go test
+cd ..
+```
+
+Similarly, for the key-value store (kvraft):
+
+```bash
+cd kvraft
+go test
+cd ..
+```
+
+And for the sharded key-value store (shardkv) and shard master:
+
+```bash
+cd shardkv
+go test
+cd ..
+
+cd shardmaster
+go test
+cd ..
+```
+
+The tests often involve creating multiple instances (peers) of the system and simulating network conditions to check for correctness, fault tolerance, and concurrency bugs. The `-race` flag can be added to `go test` (e.g., `go test -race`) to detect race conditions.
+
+## Prerequisites
+
+*   **Go:** The project is written in Go. You will need to have Go installed on your system to build and run the components and tests. You can find installation instructions on the [official Go website](https://golang.org/doc/install).
